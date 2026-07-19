@@ -31,7 +31,7 @@ module.exports = async (req, res) => {
         }
 
         // ============================================
-        // 2. CHECK BALANCE - FIXED
+        // 2. CHECK BALANCE
         // ============================================
         if (action === "balance") {
             const address = req.query.address || req.body?.address;
@@ -44,93 +44,31 @@ module.exports = async (req, res) => {
             }
 
             try {
-                // Try multiple endpoints
-                let data = null;
-                let error = null;
-
-                // Endpoint 1: Standard
-                try {
-                    const response = await axios.get(
-                        `${EXPLORER}/api/addr/${address}`,
-                        { timeout: 10000 }
-                    );
-                    data = response.data;
-                } catch (e1) {
-                    error = e1;
-                    // Endpoint 2: Alternative
-                    try {
-                        const response = await axios.get(
-                            `${EXPLORER}/insight-api/addr/${address}`,
-                            { timeout: 10000 }
-                        );
-                        data = response.data;
-                    } catch (e2) {
-                        error = e2;
-                        // Endpoint 3: Another alternative
-                        try {
-                            const response = await axios.get(
-                                `https://chainz.cryptoid.info/dgb/api.dws?q=getbalance&a=${address}`,
-                                { timeout: 10000 }
-                            );
-                            if (response.data && !response.data.error) {
-                                data = {
-                                    balance: parseFloat(response.data),
-                                    balanceSat: Math.round(parseFloat(response.data) * 100000000),
-                                    address: address
-                                };
-                            }
-                        } catch (e3) {
-                            error = e3;
-                        }
-                    }
-                }
-
-                if (!data) {
-                    throw new Error("Unable to fetch balance");
-                }
-
-                // Get market price for USD value
-                let usdValue = 0;
-                try {
-                    const market = await axios.get(
-                        "https://api.coinmarketcap.com/v1/ticker/digibyte/",
-                        { timeout: 5000 }
-                    );
-                    if (market.data && market.data[0]) {
-                        usdValue = (data.balance || 0) * parseFloat(market.data[0].price_usd);
-                    }
-                } catch (e) {
-                    // Market price not available
-                }
-
+                const { data } = await axios.get(
+                    `${EXPLORER}/api/addr/${address}`
+                );
+                
                 return res.json({
                     success: true,
                     address: address,
-                    balance: data.balance || data.balanceSat / 100000000 || 0,
-                    satoshis: data.balanceSat || Math.round((data.balance || 0) * 100000000),
-                    usd_value: usdValue.toFixed(2),
-                    total_received: data.totalReceived || 0,
-                    total_sent: data.totalSent || 0,
-                    transactions: data.transactions ? data.transactions.length : 0,
-                    unconfirmed: data.unconfirmedBalance || 0
+                    balance: data.balance || 0,
+                    satoshis: data.balanceSat || 0,
+                    transactions: data.transactions ? data.transactions.length : 0
                 });
-
             } catch (error) {
-                console.error("Balance error:", error.message);
-                return res.status(200).json({
+                return res.json({
                     success: true,
                     address: address,
                     balance: 0,
                     satoshis: 0,
-                    usd_value: "0.00",
                     transactions: 0,
-                    message: "Address exists but may have no transactions"
+                    message: "Address exists but has no transactions"
                 });
             }
         }
 
         // ============================================
-        // 3. GET UTXO - FIXED
+        // 3. GET UTXO
         // ============================================
         if (action === "utxo") {
             const address = req.query.address || req.body?.address;
@@ -143,34 +81,13 @@ module.exports = async (req, res) => {
             }
 
             try {
-                let utxos = [];
-                let error = null;
-
-                // Try multiple endpoints
-                try {
-                    const response = await axios.get(
-                        `${EXPLORER}/api/addr/${address}/utxo`,
-                        { timeout: 10000 }
-                    );
-                    utxos = response.data;
-                } catch (e1) {
-                    error = e1;
-                    try {
-                        const response = await axios.get(
-                            `${EXPLORER}/insight-api/addr/${address}/utxo`,
-                            { timeout: 10000 }
-                        );
-                        utxos = response.data;
-                    } catch (e2) {
-                        error = e2;
-                    }
-                }
-
-                // If no UTXOs or error, return empty array
-                if (!utxos || !Array.isArray(utxos)) {
-                    utxos = [];
-                }
-
+                const { data } = await axios.get(
+                    `${EXPLORER}/api/addr/${address}/utxo`
+                );
+                
+                // Ensure data is an array
+                const utxos = Array.isArray(data) ? data : [];
+                
                 const totalAmount = utxos.reduce((sum, utxo) => sum + (utxo.amount || 0), 0);
                 
                 return res.json({
@@ -181,7 +98,6 @@ module.exports = async (req, res) => {
                     total_amount: totalAmount,
                     total_satoshis: Math.round(totalAmount * 100000000)
                 });
-
             } catch (error) {
                 return res.json({
                     success: true,
@@ -190,7 +106,7 @@ module.exports = async (req, res) => {
                     total_utxos: 0,
                     total_amount: 0,
                     total_satoshis: 0,
-                    message: "No UTXOs found for this address"
+                    message: "No UTXOs found"
                 });
             }
         }
@@ -201,21 +117,15 @@ module.exports = async (req, res) => {
         if (action === "price") {
             try {
                 const { data } = await axios.get(
-                    "https://api.coinmarketcap.com/v1/ticker/digibyte/",
-                    { timeout: 5000 }
+                    "https://api.coinmarketcap.com/v1/ticker/digibyte/"
                 );
                 return res.json({
                     success: true,
                     price_usd: data[0].price_usd,
                     price_btc: data[0].price_btc,
-                    percent_change_1h: data[0].percent_change_1h || "0",
                     percent_change_24h: data[0].percent_change_24h,
-                    percent_change_7d: data[0].percent_change_7d || "0",
                     market_cap: data[0].market_cap_usd,
-                    volume_24h: data[0].volume_24h_usd,
-                    circulating_supply: data[0].available_supply,
-                    total_supply: data[0].total_supply,
-                    max_supply: data[0].max_supply || "N/A"
+                    volume_24h: data[0].volume_24h_usd
                 });
             } catch (error) {
                 return res.status(500).json({
@@ -286,30 +196,23 @@ module.exports = async (req, res) => {
                 const from = pk.toAddress().toString();
 
                 // Get UTXOs
-                let utxos = [];
+                let response;
                 try {
-                    const response = await axios.get(
+                    response = await axios.get(
                         `${EXPLORER}/api/addr/${from}/utxo`,
                         { timeout: 10000 }
                     );
-                    utxos = response.data;
                 } catch (e) {
-                    // Try alternative endpoint
-                    try {
-                        const response = await axios.get(
-                            `${EXPLORER}/insight-api/addr/${from}/utxo`,
-                            { timeout: 10000 }
-                        );
-                        utxos = response.data;
-                    } catch (e2) {
-                        return res.status(400).json({
-                            success: false,
-                            error: "Unable to get UTXOs. Address may have no funds."
-                        });
-                    }
+                    return res.status(400).json({
+                        success: false,
+                        error: "Unable to fetch UTXOs. Address may have no funds."
+                    });
                 }
 
-                if (!utxos || utxos.length === 0) {
+                // Ensure utxos is an array
+                const utxos = Array.isArray(response.data) ? response.data : [];
+                
+                if (utxos.length === 0) {
                     return res.status(400).json({
                         success: false,
                         error: "No unspent transactions available. Address has no funds to send."
@@ -342,28 +245,19 @@ module.exports = async (req, res) => {
                 // Send transaction
                 let result;
                 try {
-                    const response = await axios.post(
+                    const sendResponse = await axios.post(
                         `${EXPLORER}/api/tx/send`,
                         {
                             rawtx: tx.serialize()
                         },
                         { timeout: 15000 }
                     );
-                    result = response.data;
+                    result = sendResponse.data;
                 } catch (e) {
-                    // Try alternative endpoint
-                    try {
-                        const response = await axios.post(
-                            `${EXPLORER}/insight-api/tx/send`,
-                            {
-                                rawtx: tx.serialize()
-                            },
-                            { timeout: 15000 }
-                        );
-                        result = response.data;
-                    } catch (e2) {
-                        throw new Error("Failed to send transaction");
-                    }
+                    return res.status(500).json({
+                        success: false,
+                        error: "Failed to send transaction: " + (e.response?.data?.message || e.message)
+                    });
                 }
 
                 // Get updated balance
@@ -384,7 +278,8 @@ module.exports = async (req, res) => {
                         sent_amount_satoshis: satoshis,
                         destination: to,
                         fee_dgb: fee.toFixed(3),
-                        fee_satoshis: feeSatoshis
+                        fee_satoshis: feeSatoshis,
+                        from_address: from
                     },
                     updated_balance: {
                         dgb: updatedBalance,
@@ -406,7 +301,36 @@ module.exports = async (req, res) => {
         }
 
         // ============================================
-        // 6. DEFAULT: API Info
+        // 6. GET TRANSACTION DETAILS
+        // ============================================
+        if (action === "tx") {
+            const txid = req.query.txid || req.body?.txid;
+            
+            if (!txid) {
+                return res.status(400).json({
+                    success: false,
+                    error: "Transaction ID is required"
+                });
+            }
+
+            try {
+                const { data } = await axios.get(
+                    `${EXPLORER}/api/tx/${txid}`
+                );
+                return res.json({
+                    success: true,
+                    transaction: data
+                });
+            } catch (error) {
+                return res.status(404).json({
+                    success: false,
+                    error: "Transaction not found"
+                });
+            }
+        }
+
+        // ============================================
+        // 7. DEFAULT: API Info
         // ============================================
         return res.json({
             name: "DigiByte API",
@@ -418,7 +342,8 @@ module.exports = async (req, res) => {
                 "GET ?action=utxo&address=ADDR": "Get UTXO for address",
                 "GET ?action=price": "Get market price",
                 "GET ?action=send&privateKey=KEY&to=ADDR&amount=SAT": "Send DGB (GET)",
-                "POST with body": "Send DGB (POST) - body: {action:'send',privateKey,to,amount}"
+                "POST with body": "Send DGB (POST) - body: {action:'send',privateKey,to,amount}",
+                "GET ?action=tx&txid=TXID": "Get transaction details"
             },
             notes: {
                 satoshis: "1 DGB = 100,000,000 satoshis",
