@@ -1,32 +1,10 @@
 {
   "name": "digibyte-api",
   "version": "1.0.0",
-  "description": "Complete DigiByte cryptocurrency API on Vercel",
+  "description": "DigiByte API on Vercel",
   "main": "api/dgb.js",
-  "engines": {
-    "node": "24.x"
-  },
   "dependencies": {
     "digibyte": "^0.1.3",
     "request": "^2.88.2"
-  },
-  "scripts": {
-    "start": "node api/dgb.js",
-    "test": "echo \"No tests specified\" && exit 0"
-  },
-  "keywords": [
-    "digibyte",
-    "cryptocurrency",
-    "api",
-    "vercel",
-    "blockchain",
-    "dgb",
-    "wallet"
-  ],
-  "author": "",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/saeedgoraya987/testeralways"
   }
 }
