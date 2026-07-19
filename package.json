@@ -1,10 +1,6 @@
 {
-  "name": "digibyte-api",
-  "version": "1.0.0",
-  "description": "DigiByte API on Vercel",
-  "main": "api/dgb.js",
   "dependencies": {
-    "digibyte": "^0.1.2",
-    "request": "^2.88.2"
+    "axios": "^1.10.0",
+    "digibyte": "^1.0.3"
   }
 }
