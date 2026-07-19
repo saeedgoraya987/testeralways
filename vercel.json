@@ -1,9 +1,0 @@
-{
-  "version": 2,
-  "functions": {
-    "api/dgb.js": {
-      "runtime": "nodejs24.x",
-      "maxDuration": 10
-    }
-  }
-}
