@@ -4,7 +4,7 @@
   "description": "Complete DigiByte cryptocurrency API on Vercel",
   "main": "api/dgb.js",
   "engines": {
-    "node": "18.x"
+    "node": "24.x"
   },
   "dependencies": {
     "digibyte": "^0.1.3",
