@@ -1,7 +1,9 @@
 {
+  "version": 2,
   "functions": {
     "api/dgb.js": {
-      "runtime": "nodejs18.x"
+      "runtime": "nodejs18.x",
+      "maxDuration": 10
     }
   }
 }
