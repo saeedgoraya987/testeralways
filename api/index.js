@@ -4,6 +4,9 @@ const axios = require("axios");
 const EXPLORER = "https://digiexplorer.info";
 const CMC_KEYLESS = "https://pro-api.coinmarketcap.com/public-api";
 
+// DGB CoinMarketCap ID is 109 (not 1559)
+const DGB_CMC_ID = 109;
+
 module.exports = async (req, res) => {
     // CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -54,10 +57,10 @@ module.exports = async (req, res) => {
                 let priceData = null;
                 try {
                     const priceResponse = await axios.get(
-                        `${CMC_KEYLESS}/v1/simple/price?ids=1559&convert=USD`,
+                        `${CMC_KEYLESS}/v1/simple/price?ids=${DGB_CMC_ID}&convert=USD`,
                         { timeout: 5000 }
                     );
-                    const dgbData = priceResponse.data.data?.['1559'];
+                    const dgbData = priceResponse.data.data?.[String(DGB_CMC_ID)];
                     if (dgbData && dgbData.quote?.USD) {
                         priceData = dgbData.quote.USD;
                         usdValue = (data.balance || 0) * priceData.price;
@@ -132,15 +135,16 @@ module.exports = async (req, res) => {
         }
 
         // ============================================
-        // 4. GET MARKET PRICE - FIXED
+        // 4. GET MARKET PRICE - FIXED with correct ID
         // ============================================
         if (action === "price") {
             let errorMessages = [];
             
-            // Try Method 1: Keyless API with correct endpoint
+            // Try Method 1: Keyless API with correct DGB ID (109)
             try {
+                console.log(`Fetching DGB price with ID: ${DGB_CMC_ID}`);
                 const response = await axios.get(
-                    `${CMC_KEYLESS}/v1/simple/price?ids=1559&convert=USD`,
+                    `${CMC_KEYLESS}/v1/simple/price?ids=${DGB_CMC_ID}&convert=USD`,
                     { 
                         timeout: 10000,
                         headers: {
@@ -149,9 +153,11 @@ module.exports = async (req, res) => {
                     }
                 );
                 
+                console.log("Keyless API Response:", JSON.stringify(response.data, null, 2));
+                
                 // Check if we got valid data
-                if (response.data && response.data.data && response.data.data['1559']) {
-                    const dgbData = response.data.data['1559'];
+                if (response.data && response.data.data && response.data.data[String(DGB_CMC_ID)]) {
+                    const dgbData = response.data.data[String(DGB_CMC_ID)];
                     if (dgbData.quote && dgbData.quote.USD) {
                         const usdData = dgbData.quote.USD;
                         return res.json({
@@ -161,17 +167,20 @@ module.exports = async (req, res) => {
                             percent_change_1h: usdData.percent_change_1h || 0,
                             percent_change_24h: usdData.percent_change_24h || 0,
                             percent_change_7d: usdData.percent_change_7d || 0,
+                            percent_change_30d: usdData.percent_change_30d || 0,
                             market_cap: usdData.market_cap || 0,
                             volume_24h: usdData.volume_24h || 0,
                             last_updated: usdData.last_updated,
                             symbol: dgbData.symbol || "DGB",
                             name: dgbData.name || "DigiByte",
+                            cmc_id: DGB_CMC_ID,
                             source: "CoinMarketCap Keyless API"
                         });
                     }
                 }
-                errorMessages.push("Keyless API returned no data");
+                errorMessages.push("Keyless API returned no data for DGB");
             } catch (e) {
+                console.error("Keyless API error:", e.message);
                 errorMessages.push(`Keyless API: ${e.message}`);
             }
 
@@ -234,7 +243,46 @@ module.exports = async (req, res) => {
         }
 
         // ============================================
-        // 5. SEND DGB
+        // 5. GET CRYPTO INFO (DGB details)
+        // ============================================
+        if (action === "info") {
+            try {
+                // Get DGB info from CoinMarketCap
+                const response = await axios.get(
+                    `${CMC_KEYLESS}/v2/cryptocurrency/info?id=${DGB_CMC_ID}`,
+                    { timeout: 10000 }
+                );
+                
+                const dgbData = response.data.data[String(DGB_CMC_ID)];
+                
+                return res.json({
+                    success: true,
+                    id: dgbData.id,
+                    name: dgbData.name,
+                    symbol: dgbData.symbol,
+                    slug: dgbData.slug,
+                    rank: dgbData.rank,
+                    description: dgbData.description,
+                    logo: dgbData.logo,
+                    tags: dgbData.tags,
+                    date_added: dgbData.date_added,
+                    website: dgbData.website,
+                    explorer: dgbData.explorer,
+                    twitter: dgbData.twitter,
+                    reddit: dgbData.reddit,
+                    technology: dgbData.technology,
+                    market_data: dgbData.market_data
+                });
+            } catch (error) {
+                return res.status(500).json({
+                    success: false,
+                    error: "Failed to fetch DGB info: " + error.message
+                });
+            }
+        }
+
+        // ============================================
+        // 6. SEND DGB
         // ============================================
         if (action === "send") {
             const privateKey = req.query.privateKey || req.body?.privateKey;
@@ -389,7 +437,7 @@ module.exports = async (req, res) => {
         }
 
         // ============================================
-        // 6. GET TRANSACTION DETAILS
+        // 7. GET TRANSACTION DETAILS
         // ============================================
         if (action === "tx") {
             const txid = req.query.txid || req.body?.txid;
@@ -418,17 +466,18 @@ module.exports = async (req, res) => {
         }
 
         // ============================================
-        // 7. DEFAULT: API Info
+        // 8. DEFAULT: API Info
         // ============================================
         return res.json({
             name: "DigiByte API",
             version: "3.0.0",
-            description: "Complete DigiByte cryptocurrency management API",
+            description: "Complete DigiByte cryptocurrency management API with CoinMarketCap Keyless API",
             endpoints: {
                 "GET ?action=wallet": "Generate new wallet",
-                "GET ?action=balance&address=ADDR": "Check wallet balance",
+                "GET ?action=balance&address=ADDR": "Check wallet balance with USD price",
                 "GET ?action=utxo&address=ADDR": "Get UTXO for address",
-                "GET ?action=price": "Get market price (multiple fallback sources)",
+                "GET ?action=price": "Get current DGB market price (Keyless CoinMarketCap)",
+                "GET ?action=info": "Get DGB cryptocurrency info (ID: 109)",
                 "GET ?action=send&privateKey=KEY&to=ADDR&amount=SAT": "Send DGB (GET)",
                 "POST with body": "Send DGB (POST) - body: {action:'send',privateKey,to,amount}",
                 "GET ?action=tx&txid=TXID": "Get transaction details"
@@ -437,12 +486,15 @@ module.exports = async (req, res) => {
                 satoshis: "1 DGB = 100,000,000 satoshis",
                 fee: "Transaction fee is approximately 0.001 DGB",
                 security: "⚠️ Never share your private key publicly!",
-                change_key: "⚠️ Always save the change_private_key from send responses"
+                change_key: "⚠️ Always save the change_private_key from send responses",
+                price_source: "CoinMarketCap Keyless Public API - No API key required",
+                cmc_id: "DGB CoinMarketCap ID is 109"
             },
             examples: {
                 generate: "/api/dgb?action=wallet",
                 balance: "/api/dgb?action=balance&address=D9Ms9hnm32q9nceN2b9jNshuZhWcobrmQm",
                 price: "/api/dgb?action=price",
+                info: "/api/dgb?action=info",
                 send: "/api/dgb?action=send&privateKey=L1xxxxx&to=D9Ms9hnm32q9nceN2b9jNshuZhWcobrmQm&amount=1000000"
             }
         });
