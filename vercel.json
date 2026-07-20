@@ -1,1 +1,41 @@
-{}
+{
+  "functions": {
+    "api/transfer.py": {
+      "runtime": "python3.12",
+      "maxDuration": 10
+    }
+  },
+  "routes": [
+    {
+      "src": "/api/transfer",
+      "dest": "/api/transfer.py"
+    },
+    {
+      "src": "/transfer",
+      "dest": "/api/transfer.py"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET, POST, OPTIONS"
+        },
+        {
+          "key": "Access-Control-Allow-Headers",
+          "value": "Content-Type, Rocket-Pay-Key"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        }
+      ]
+    }
+  ]
+}
