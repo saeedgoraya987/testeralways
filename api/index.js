@@ -57,8 +57,8 @@ module.exports = async (req, res) => {
                         `${CMC_KEYLESS}/v1/simple/price?ids=1559&convert=USD`,
                         { timeout: 5000 }
                     );
-                    const dgbData = priceResponse.data.data['1559'];
-                    if (dgbData && dgbData.quote.USD) {
+                    const dgbData = priceResponse.data.data?.['1559'];
+                    if (dgbData && dgbData.quote?.USD) {
                         priceData = dgbData.quote.USD;
                         usdValue = (data.balance || 0) * priceData.price;
                     }
@@ -107,9 +107,7 @@ module.exports = async (req, res) => {
                     `${EXPLORER}/api/addr/${address}/utxo`
                 );
                 
-                // Ensure data is an array
                 const utxos = Array.isArray(data) ? data : [];
-                
                 const totalAmount = utxos.reduce((sum, utxo) => sum + (utxo.amount || 0), 0);
                 
                 return res.json({
@@ -134,57 +132,115 @@ module.exports = async (req, res) => {
         }
 
         // ============================================
-        // 4. GET MARKET PRICE - Using Keyless API
+        // 4. GET MARKET PRICE - FIXED
         // ============================================
         if (action === "price") {
+            let errorMessages = [];
+            
+            // Try Method 1: Keyless API with correct endpoint
             try {
-                // DGB ID is 1559 in CoinMarketCap
                 const response = await axios.get(
                     `${CMC_KEYLESS}/v1/simple/price?ids=1559&convert=USD`,
+                    { 
+                        timeout: 10000,
+                        headers: {
+                            'Accept': 'application/json'
+                        }
+                    }
+                );
+                
+                // Check if we got valid data
+                if (response.data && response.data.data && response.data.data['1559']) {
+                    const dgbData = response.data.data['1559'];
+                    if (dgbData.quote && dgbData.quote.USD) {
+                        const usdData = dgbData.quote.USD;
+                        return res.json({
+                            success: true,
+                            price_usd: usdData.price,
+                            price_btc: usdData.price_btc || null,
+                            percent_change_1h: usdData.percent_change_1h || 0,
+                            percent_change_24h: usdData.percent_change_24h || 0,
+                            percent_change_7d: usdData.percent_change_7d || 0,
+                            market_cap: usdData.market_cap || 0,
+                            volume_24h: usdData.volume_24h || 0,
+                            last_updated: usdData.last_updated,
+                            symbol: dgbData.symbol || "DGB",
+                            name: dgbData.name || "DigiByte",
+                            source: "CoinMarketCap Keyless API"
+                        });
+                    }
+                }
+                errorMessages.push("Keyless API returned no data");
+            } catch (e) {
+                errorMessages.push(`Keyless API: ${e.message}`);
+            }
+
+            // Try Method 2: Free API (no key required)
+            try {
+                const response = await axios.get(
+                    "https://api.coinmarketcap.com/v1/ticker/digibyte/",
                     { timeout: 10000 }
                 );
                 
-                const dgbData = response.data.data['1559'];
-                
-                if (!dgbData || !dgbData.quote || !dgbData.quote.USD) {
-                    throw new Error("No price data available");
+                if (response.data && response.data[0]) {
+                    const data = response.data[0];
+                    return res.json({
+                        success: true,
+                        price_usd: parseFloat(data.price_usd),
+                        price_btc: parseFloat(data.price_btc),
+                        percent_change_1h: parseFloat(data.percent_change_1h) || 0,
+                        percent_change_24h: parseFloat(data.percent_change_24h) || 0,
+                        percent_change_7d: parseFloat(data.percent_change_7d) || 0,
+                        market_cap: parseFloat(data.market_cap_usd) || 0,
+                        volume_24h: parseFloat(data.volume_24h_usd) || 0,
+                        symbol: data.symbol || "DGB",
+                        name: data.name || "DigiByte",
+                        source: "CoinMarketCap Free API"
+                    });
                 }
-
-                const usdData = dgbData.quote.USD;
-                
-                return res.json({
-                    success: true,
-                    price_usd: usdData.price,
-                    price_btc: usdData.price_btc || null,
-                    percent_change_1h: usdData.percent_change_1h || 0,
-                    percent_change_24h: usdData.percent_change_24h || 0,
-                    percent_change_7d: usdData.percent_change_7d || 0,
-                    percent_change_30d: usdData.percent_change_30d || 0,
-                    market_cap: usdData.market_cap || 0,
-                    volume_24h: usdData.volume_24h || 0,
-                    last_updated: usdData.last_updated,
-                    symbol: dgbData.symbol,
-                    name: dgbData.name
-                });
-            } catch (error) {
-                console.error("Price fetch error:", error.message);
-                return res.status(500).json({
-                    success: false,
-                    error: "Failed to fetch DGB price: " + error.message
-                });
+                errorMessages.push("Free API returned no data");
+            } catch (e) {
+                errorMessages.push(`Free API: ${e.message}`);
             }
+
+            // Try Method 3: Alternative API
+            try {
+                const response = await axios.get(
+                    "https://min-api.cryptocompare.com/data/price?fsym=DGB&tsyms=USD,BTC",
+                    { timeout: 10000 }
+                );
+                
+                if (response.data && response.data.USD) {
+                    return res.json({
+                        success: true,
+                        price_usd: response.data.USD,
+                        price_btc: response.data.BTC || null,
+                        source: "CryptoCompare API",
+                        note: "Using alternative price source"
+                    });
+                }
+                errorMessages.push("CryptoCompare returned no data");
+            } catch (e) {
+                errorMessages.push(`CryptoCompare: ${e.message}`);
+            }
+
+            // If all methods failed
+            return res.status(500).json({
+                success: false,
+                error: "Failed to fetch DGB price from all sources",
+                details: errorMessages,
+                note: "Try using the balance endpoint which includes price data"
+            });
         }
 
         // ============================================
         // 5. SEND DGB
         // ============================================
         if (action === "send") {
-            // Support both GET and POST
             const privateKey = req.query.privateKey || req.body?.privateKey;
             const to = req.query.to || req.body?.to;
             const amount = req.query.amount || req.body?.amount;
 
-            // Validate inputs
             if (!privateKey) {
                 return res.status(400).json({
                     success: false,
@@ -222,7 +278,6 @@ module.exports = async (req, res) => {
             }
 
             try {
-                // Import private key
                 let pk;
                 try {
                     pk = DigiByte.PrivateKey.fromWIF(privateKey);
@@ -235,7 +290,6 @@ module.exports = async (req, res) => {
 
                 const from = pk.toAddress().toString();
 
-                // Get UTXOs
                 let response;
                 try {
                     response = await axios.get(
@@ -249,7 +303,6 @@ module.exports = async (req, res) => {
                     });
                 }
 
-                // Ensure utxos is an array
                 const utxos = Array.isArray(response.data) ? response.data : [];
                 
                 if (utxos.length === 0) {
@@ -259,9 +312,8 @@ module.exports = async (req, res) => {
                     });
                 }
 
-                // Calculate total balance
                 const totalBalance = utxos.reduce((sum, u) => sum + (u.amount || 0), 0);
-                const fee = 0.001; // DGB
+                const fee = 0.001;
                 const feeSatoshis = Math.round(fee * 100000000);
 
                 if (totalBalance * 100000000 < satoshis + feeSatoshis) {
@@ -271,18 +323,15 @@ module.exports = async (req, res) => {
                     });
                 }
 
-                // Create change address
                 const changePrivateKey = new DigiByte.PrivateKey();
                 const changeAddress = changePrivateKey.toAddress();
 
-                // Build transaction
                 const tx = new DigiByte.Transaction();
                 utxos.forEach(u => tx.from(u));
                 tx.to(to, satoshis);
                 tx.change(changeAddress.toString());
                 tx.sign(pk);
 
-                // Send transaction
                 let result;
                 try {
                     const sendResponse = await axios.post(
@@ -300,7 +349,6 @@ module.exports = async (req, res) => {
                     });
                 }
 
-                // Get updated balance
                 let updatedBalance = 0;
                 try {
                     const balanceData = await axios.get(
@@ -370,79 +418,17 @@ module.exports = async (req, res) => {
         }
 
         // ============================================
-        // 7. GET CRYPTO LISTINGS (Top Cryptocurrencies)
-        // ============================================
-        if (action === "listings") {
-            try {
-                const limit = parseInt(req.query.limit || req.body?.limit || 10);
-                const response = await axios.get(
-                    `${CMC_KEYLESS}/v3/cryptocurrency/listings/latest?start=1&limit=${limit}&convert=USD`,
-                    { timeout: 10000 }
-                );
-                
-                const listings = response.data.data.map(crypto => ({
-                    rank: crypto.cmc_rank,
-                    name: crypto.name,
-                    symbol: crypto.symbol,
-                    price: crypto.quote.USD.price,
-                    market_cap: crypto.quote.USD.market_cap,
-                    volume_24h: crypto.quote.USD.volume_24h,
-                    percent_change_24h: crypto.quote.USD.percent_change_24h
-                }));
-                
-                return res.json({
-                    success: true,
-                    listings: listings,
-                    total: listings.length
-                });
-            } catch (error) {
-                return res.status(500).json({
-                    success: false,
-                    error: "Failed to fetch listings: " + error.message
-                });
-            }
-        }
-
-        // ============================================
-        // 8. GET CMC FEAR & GREED INDEX
-        // ============================================
-        if (action === "fear") {
-            try {
-                const response = await axios.get(
-                    `${CMC_KEYLESS}/v3/fear-and-greed/latest`,
-                    { timeout: 10000 }
-                );
-                
-                const data = response.data.data[0];
-                return res.json({
-                    success: true,
-                    value: data.value,
-                    value_classification: data.value_classification,
-                    timestamp: data.timestamp,
-                    time_until_update: data.time_until_update
-                });
-            } catch (error) {
-                return res.status(500).json({
-                    success: false,
-                    error: "Failed to fetch Fear & Greed Index: " + error.message
-                });
-            }
-        }
-
-        // ============================================
-        // 9. DEFAULT: API Info
+        // 7. DEFAULT: API Info
         // ============================================
         return res.json({
             name: "DigiByte API",
             version: "3.0.0",
-            description: "Complete DigiByte cryptocurrency management API with CoinMarketCap Keyless API",
+            description: "Complete DigiByte cryptocurrency management API",
             endpoints: {
                 "GET ?action=wallet": "Generate new wallet",
-                "GET ?action=balance&address=ADDR": "Check wallet balance with USD price",
+                "GET ?action=balance&address=ADDR": "Check wallet balance",
                 "GET ?action=utxo&address=ADDR": "Get UTXO for address",
-                "GET ?action=price": "Get current DGB market price (Keyless CoinMarketCap)",
-                "GET ?action=listings&limit=10": "Get top cryptocurrency listings",
-                "GET ?action=fear": "Get CMC Fear & Greed Index",
+                "GET ?action=price": "Get market price (multiple fallback sources)",
                 "GET ?action=send&privateKey=KEY&to=ADDR&amount=SAT": "Send DGB (GET)",
                 "POST with body": "Send DGB (POST) - body: {action:'send',privateKey,to,amount}",
                 "GET ?action=tx&txid=TXID": "Get transaction details"
@@ -451,14 +437,12 @@ module.exports = async (req, res) => {
                 satoshis: "1 DGB = 100,000,000 satoshis",
                 fee: "Transaction fee is approximately 0.001 DGB",
                 security: "⚠️ Never share your private key publicly!",
-                change_key: "⚠️ Always save the change_private_key from send responses",
-                price_source: "CoinMarketCap Keyless Public API - No API key required"
+                change_key: "⚠️ Always save the change_private_key from send responses"
             },
             examples: {
                 generate: "/api/dgb?action=wallet",
                 balance: "/api/dgb?action=balance&address=D9Ms9hnm32q9nceN2b9jNshuZhWcobrmQm",
                 price: "/api/dgb?action=price",
-                fear: "/api/dgb?action=fear",
                 send: "/api/dgb?action=send&privateKey=L1xxxxx&to=D9Ms9hnm32q9nceN2b9jNshuZhWcobrmQm&amount=1000000"
             }
         });
