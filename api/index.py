@@ -7,11 +7,11 @@ from pytoniq import WalletV4R2, LiteBalancer
 from pytoniq_core import Address, Cell, begin_cell
 
 # ============================================
-# TON WALLET CLASS - FIXED TRANSFER
+# TON WALLET CLASS - COMPLETE FIX
 # ============================================
 
 class TONWallet:
-    """TON Wallet handler - Fixed transfer"""
+    """TON Wallet handler - Completely fixed"""
     
     def __init__(self):
         self.recovery_phrase = os.getenv('TON_RECOVERY_PHRASE')
@@ -48,14 +48,6 @@ class TONWallet:
         print(f"✅ Wallet loaded: {self.address_user_friendly}")
         
         return self.wallet
-    
-    async def get_seqno_safe(self):
-        """Get seqno safely"""
-        try:
-            await self.init_wallet()
-            return await self.wallet.get_seqno()
-        except Exception:
-            return 0
     
     async def get_balance(self):
         """Get TON balance"""
@@ -102,7 +94,7 @@ class TONWallet:
             return 0
     
     async def send_ton(self, to_address, amount_ton, comment=""):
-        """Send TON - FIXED: use body parameter"""
+        """Send TON - COMPLETELY FIXED"""
         try:
             # Initialize wallet
             await self.init_wallet()
@@ -110,37 +102,46 @@ class TONWallet:
             # Validate address
             addr = Address(to_address)
             
-            # Get seqno
+            # Get seqno - ALWAYS try to get it from chain
             try:
                 seqno = await self.wallet.get_seqno()
-            except Exception:
-                seqno = 0
+                print(f"📊 Seqno from chain: {seqno}")
+            except Exception as e:
+                print(f"Seqno error: {e}")
+                # If error, try getting from provider directly
+                try:
+                    seqno = await self.provider.get_seqno(self.address_raw)
+                    print(f"📊 Seqno from provider: {seqno}")
+                except:
+                    # Last resort - assume 0
+                    seqno = 0
+                    print(f"📊 Seqno default: {seqno}")
             
-            print(f"📊 Seqno: {seqno}")
-            
-            # Check if wallet is active
+            # Check balance
             balance = await self.get_balance()
-            if balance == 0 and seqno == 0:
+            if balance < amount_ton:
                 return {
                     'success': False,
-                    'error': 'Wallet is new (0 balance, 0 transactions). Please send at least 0.01 TON to activate it first.'
+                    'error': f'Insufficient balance. Have: {balance} TON, Need: {amount_ton} TON'
                 }
+            
+            print(f"💰 Balance: {balance} TON")
+            print(f"📊 Seqno: {seqno}")
             
             # Create comment cell if needed
             message = None
             if comment:
-                # Create a cell with the comment
                 message = begin_cell() \
                     .store_uint(0, 32) \
                     .store_string(comment) \
                     .end_cell()
             
-            # Create transfer - use 'body' instead of 'comment'
+            # Create transfer
             tx = await self.wallet.transfer(
                 destination=addr,
                 amount=int(amount_ton * 1e9),
                 seqno=seqno,
-                body=message  # Use body parameter for comments
+                body=message
             )
             
             # Send
@@ -157,8 +158,7 @@ class TONWallet:
             
         except Exception as e:
             error_msg = str(e)
-            if '-256' in error_msg or 'seqno' in error_msg:
-                error_msg = 'Wallet needs activation. Please send at least 0.01 TON to this wallet first.'
+            print(f"❌ Send error: {error_msg}")
             return {
                 'success': False,
                 'error': error_msg
@@ -177,17 +177,20 @@ class TONWallet:
             try:
                 seqno = await self.wallet.get_seqno()
             except Exception:
-                seqno = 0
+                try:
+                    seqno = await self.provider.get_seqno(self.address_raw)
+                except:
+                    seqno = 0
             
-            # Check if wallet is active
-            balance = await self.get_balance()
-            if balance == 0 and seqno == 0:
+            # Check USDT balance
+            usdt_balance = await self.get_usdt_balance()
+            if usdt_balance < amount_usdt:
                 return {
                     'success': False,
-                    'error': 'Wallet is new. Please send at least 0.01 TON to activate it first.'
+                    'error': f'Insufficient USDT. Have: {usdt_balance} USDT'
                 }
             
-            # Create comment cell if needed
+            # Create comment
             message = None
             if comment:
                 message = begin_cell() \
@@ -200,7 +203,7 @@ class TONWallet:
                 destination=addr,
                 amount=int(amount_usdt * 1e9),
                 seqno=seqno,
-                body=message  # Use body for comments
+                body=message
             )
             
             await self.wallet.send_transfer(tx)
@@ -369,16 +372,6 @@ class handler(BaseHTTPRequestHandler):
             async def send():
                 w = TONWallet()
                 await w.init_wallet()
-                
-                # Check balance
-                balance = await w.get_balance()
-                if balance < amount:
-                    return {
-                        'success': False,
-                        'error': f'Insufficient balance. Have: {balance} TON'
-                    }
-                
-                # Send
                 return await w.send_ton(to_address, amount, comment)
             
             result = asyncio.run(send())
@@ -423,14 +416,6 @@ class handler(BaseHTTPRequestHandler):
             async def send_usdt():
                 w = TONWallet()
                 await w.init_wallet()
-                
-                usdt_balance = await w.get_usdt_balance()
-                if usdt_balance < amount:
-                    return {
-                        'success': False,
-                        'error': f'Insufficient USDT. Have: {usdt_balance} USDT'
-                    }
-                
                 return await w.send_usdt(to_address, amount, comment)
             
             result = asyncio.run(send_usdt())
