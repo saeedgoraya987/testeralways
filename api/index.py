@@ -7,11 +7,11 @@ from pytoniq import WalletV4R2, LiteBalancer
 from pytoniq_core import Address
 
 # ============================================
-# TON WALLET CLASS - FULLY WORKING
+# TON WALLET CLASS - WITH CORRECT ADDRESS FORMAT
 # ============================================
 
 class TONWallet:
-    """TON Wallet handler - Complete working version"""
+    """TON Wallet handler - Fixed address format"""
     
     def __init__(self):
         self.recovery_phrase = os.getenv('TON_RECOVERY_PHRASE')
@@ -25,6 +25,8 @@ class TONWallet:
         self.mnemonic_list = mnemonic_list
         self.wallet = None
         self.address = None
+        self.address_raw = None  # Raw format (EQC...)
+        self.address_user_friendly = None  # User-friendly format (UQC...)
         self.provider = None
     
     async def _init_wallet(self):
@@ -40,9 +42,20 @@ class TONWallet:
                 provider=self.provider
             )
             
-            # Get address
-            self.address = self.wallet.address.to_str()
-            print(f"✅ Wallet loaded: {self.address}")
+            # Get address in RAW format (EQC...)
+            self.address_raw = self.wallet.address.to_str()
+            
+            # Convert to USER-FRIENDLY format (UQC...)
+            # Remove the workchain prefix and convert
+            addr = Address(self.address_raw)
+            self.address_user_friendly = addr.to_str(is_user_friendly=True)
+            
+            # Set default address to user-friendly
+            self.address = self.address_user_friendly
+            
+            print(f"✅ Wallet loaded")
+            print(f"   Raw address: {self.address_raw}")
+            print(f"   User-friendly: {self.address_user_friendly}")
         
         return self.wallet
     
@@ -52,15 +65,15 @@ class TONWallet:
             # Initialize wallet first
             await self._init_wallet()
             
-            # Use provider to get balance
-            balance = await self.provider.get_balance(self.address)
+            # Use provider to get balance (works with any format)
+            balance = await self.provider.get_balance(self.address_raw)
             return balance / 1e9
         except Exception as e:
             print(f"Balance error: {e}")
             # Fallback to TON Center API
             try:
                 url = "https://toncenter.com/api/v2/getAddressBalance"
-                params = {'address': self.address}
+                params = {'address': self.address_raw}
                 response = requests.get(url, params=params, timeout=10)
                 if response.status_code == 200:
                     data = response.json()
@@ -80,7 +93,7 @@ class TONWallet:
             # Use TON Center API for USDT
             url = "https://toncenter.com/api/v2/getAccountJettonBalance"
             params = {
-                'address': self.address,
+                'address': self.address_raw,
                 'jetton_master': USDT_MASTER
             }
             response = requests.get(url, params=params, timeout=10)
@@ -100,12 +113,13 @@ class TONWallet:
         try:
             await self._init_wallet()
             
-            Address(to_address)
+            # Validate and convert address
+            addr = Address(to_address)
             
             seqno = await self.wallet.get_seqno()
             
             tx = await self.wallet.transfer(
-                destination=Address(to_address),
+                destination=addr,
                 amount=int(amount_ton * 1e9),
                 comment=comment,
                 seqno=seqno
@@ -118,7 +132,7 @@ class TONWallet:
                 'tx_hash': tx.hash().hex(),
                 'amount': amount_ton,
                 'to': to_address,
-                'from': self.address
+                'from': self.address_user_friendly
             }
             
         except Exception as e:
@@ -134,13 +148,13 @@ class TONWallet:
         try:
             await self._init_wallet()
             
-            Address(to_address)
+            addr = Address(to_address)
             
             seqno = await self.wallet.get_seqno()
             
             tx = await self.wallet.transfer_jettons(
                 jetton_master=Address(USDT_MASTER),
-                destination=Address(to_address),
+                destination=addr,
                 amount=int(amount_usdt * 1e9),
                 comment=comment,
                 seqno=seqno
@@ -153,7 +167,8 @@ class TONWallet:
                 'tx_hash': tx.hash().hex(),
                 'amount': amount_usdt,
                 'to': to_address,
-                'currency': 'USDT'
+                'currency': 'USDT',
+                'from': self.address_user_friendly
             }
             
         except Exception as e:
@@ -261,7 +276,8 @@ class handler(BaseHTTPRequestHandler):
             
             response = {
                 'success': True,
-                'address': wallet.address,
+                'address': wallet.address_user_friendly,  # User-friendly format
+                'address_raw': wallet.address_raw,  # Raw format (for reference)
                 'balances': {
                     'ton': ton_balance,
                     'usdt': usdt_balance
@@ -283,8 +299,9 @@ class handler(BaseHTTPRequestHandler):
             
             response = {
                 'success': True,
-                'address': wallet.address,
-                'explorer_url': f'https://tonscan.org/address/{wallet.address}',
+                'address': wallet.address_user_friendly,  # User-friendly format
+                'address_raw': wallet.address_raw,  # Raw format
+                'explorer_url': f'https://tonscan.org/address/{wallet.address_user_friendly}',
                 'network': 'mainnet'
             }
             self.send_success_response(response)
