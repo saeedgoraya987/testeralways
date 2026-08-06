@@ -7,11 +7,11 @@ from pytoniq import WalletV4R2, LiteBalancer
 from pytoniq_core import Address
 
 # ============================================
-# TON WALLET CLASS - WITH CORRECT ADDRESS FORMAT
+# TON WALLET CLASS - WITH PROPER LOOP HANDLING
 # ============================================
 
 class TONWallet:
-    """TON Wallet handler - Fixed address format"""
+    """TON Wallet handler - Fixed event loop"""
     
     def __init__(self):
         self.recovery_phrase = os.getenv('TON_RECOVERY_PHRASE')
@@ -25,39 +25,63 @@ class TONWallet:
         self.mnemonic_list = mnemonic_list
         self.wallet = None
         self.address = None
-        self.address_raw = None  # Raw format (EQC...)
-        self.address_user_friendly = None  # User-friendly format (UQC...)
+        self.address_raw = None
+        self.address_user_friendly = None
         self.provider = None
+        self._initialized = False
     
     async def _init_wallet(self):
-        """Initialize wallet asynchronously"""
-        if self.wallet is None:
-            # Create provider
-            self.provider = LiteBalancer.from_mainnet_config(trust_level=1)
-            await self.provider.start_up()
-            
-            # Create wallet - AWAIT the coroutine
-            self.wallet = await WalletV4R2.from_mnemonic(
-                mnemonics=self.mnemonic_list,
-                provider=self.provider
-            )
-            
-            # Get address in RAW format (EQC...)
-            self.address_raw = self.wallet.address.to_str()
-            
-            # Convert to USER-FRIENDLY format (UQC...)
-            # Remove the workchain prefix and convert
-            addr = Address(self.address_raw)
-            self.address_user_friendly = addr.to_str(is_user_friendly=True)
-            
-            # Set default address to user-friendly
-            self.address = self.address_user_friendly
-            
-            print(f"✅ Wallet loaded")
-            print(f"   Raw address: {self.address_raw}")
-            print(f"   User-friendly: {self.address_user_friendly}")
+        """Initialize wallet asynchronously - runs in the correct loop"""
+        if self._initialized and self.wallet is not None:
+            return self.wallet
+        
+        # Create provider
+        self.provider = LiteBalancer.from_mainnet_config(trust_level=1)
+        await self.provider.start_up()
+        
+        # Create wallet - AWAIT the coroutine
+        self.wallet = await WalletV4R2.from_mnemonic(
+            mnemonics=self.mnemonic_list,
+            provider=self.provider
+        )
+        
+        # Get address in RAW format (EQC...)
+        self.address_raw = self.wallet.address.to_str()
+        
+        # Convert to USER-FRIENDLY format (UQC...)
+        addr = Address(self.address_raw)
+        self.address_user_friendly = addr.to_str(is_user_friendly=True)
+        
+        # Set default address to user-friendly
+        self.address = self.address_user_friendly
+        
+        self._initialized = True
+        
+        print(f"✅ Wallet loaded")
+        print(f"   Raw address: {self.address_raw}")
+        print(f"   User-friendly: {self.address_user_friendly}")
         
         return self.wallet
+    
+    def get_loop(self):
+        """Get or create event loop"""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop
+    
+    def run_async(self, coro):
+        """Run async function in the correct loop"""
+        loop = self.get_loop()
+        
+        if loop.is_running():
+            # If loop is already running, create a new task
+            return asyncio.create_task(coro)
+        else:
+            # Run until complete
+            return loop.run_until_complete(coro)
     
     async def get_balance(self):
         """Get TON balance"""
@@ -65,7 +89,7 @@ class TONWallet:
             # Initialize wallet first
             await self._init_wallet()
             
-            # Use provider to get balance (works with any format)
+            # Use provider to get balance
             balance = await self.provider.get_balance(self.address_raw)
             return balance / 1e9
         except Exception as e:
@@ -111,13 +135,16 @@ class TONWallet:
     async def send_ton(self, to_address, amount_ton, comment=""):
         """Send TON"""
         try:
+            # Initialize wallet
             await self._init_wallet()
             
-            # Validate and convert address
+            # Validate address
             addr = Address(to_address)
             
+            # Get seqno
             seqno = await self.wallet.get_seqno()
             
+            # Create transfer
             tx = await self.wallet.transfer(
                 destination=addr,
                 amount=int(amount_ton * 1e9),
@@ -125,6 +152,7 @@ class TONWallet:
                 seqno=seqno
             )
             
+            # Send
             await self.wallet.send_transfer(tx)
             
             return {
@@ -199,6 +227,24 @@ def get_wallet():
     return _wallet_instance
 
 # ============================================
+# HELPER: Run async in sync context
+# ============================================
+
+def run_async_safe(coro):
+    """Run async coroutine safely in any context"""
+    try:
+        # Try to get running loop
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop, create one
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    else:
+        # Loop is running, create task
+        return asyncio.run_coroutine_threadsafe(coro, loop).result()
+
+# ============================================
 # VERCEL HANDLER
 # ============================================
 
@@ -240,7 +286,7 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
     
     # ============================================
-    # Handlers
+    # Handlers - Using run_async_safe
     # ============================================
     
     def handle_root(self):
@@ -263,21 +309,23 @@ class handler(BaseHTTPRequestHandler):
         try:
             wallet = get_wallet()
             
-            # Run async function
+            # Run async functions safely
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
-            # Initialize wallet first
+            # Initialize wallet
             loop.run_until_complete(wallet._init_wallet())
             
             # Get balances
             ton_balance = loop.run_until_complete(wallet.get_balance())
             usdt_balance = loop.run_until_complete(wallet.get_usdt_balance())
             
+            loop.close()
+            
             response = {
                 'success': True,
-                'address': wallet.address_user_friendly,  # User-friendly format
-                'address_raw': wallet.address_raw,  # Raw format (for reference)
+                'address': wallet.address_user_friendly,
+                'address_raw': wallet.address_raw,
                 'balances': {
                     'ton': ton_balance,
                     'usdt': usdt_balance
@@ -296,11 +344,12 @@ class handler(BaseHTTPRequestHandler):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             loop.run_until_complete(wallet._init_wallet())
+            loop.close()
             
             response = {
                 'success': True,
-                'address': wallet.address_user_friendly,  # User-friendly format
-                'address_raw': wallet.address_raw,  # Raw format
+                'address': wallet.address_user_friendly,
+                'address_raw': wallet.address_raw,
                 'explorer_url': f'https://tonscan.org/address/{wallet.address_user_friendly}',
                 'network': 'mainnet'
             }
@@ -336,24 +385,29 @@ class handler(BaseHTTPRequestHandler):
                 self.send_error_response(400, 'Invalid recipient address')
                 return
             
+            # Create a new event loop for this request
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
-            # Initialize wallet
-            loop.run_until_complete(wallet._init_wallet())
-            
-            # Check balance
-            balance = loop.run_until_complete(wallet.get_balance())
-            if balance < amount:
-                self.send_error_response(400, f'Insufficient balance. Have: {balance} TON')
-                return
-            
-            # Send
-            result = loop.run_until_complete(
-                wallet.send_ton(to_address, amount, comment)
-            )
-            
-            self.send_success_response(result)
+            try:
+                # Initialize wallet
+                loop.run_until_complete(wallet._init_wallet())
+                
+                # Check balance
+                balance = loop.run_until_complete(wallet.get_balance())
+                if balance < amount:
+                    self.send_error_response(400, f'Insufficient balance. Have: {balance} TON')
+                    return
+                
+                # Send
+                result = loop.run_until_complete(
+                    wallet.send_ton(to_address, amount, comment)
+                )
+                
+                self.send_success_response(result)
+                
+            finally:
+                loop.close()
             
         except json.JSONDecodeError:
             self.send_error_response(400, 'Invalid JSON')
@@ -390,20 +444,24 @@ class handler(BaseHTTPRequestHandler):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
-            # Initialize wallet
-            loop.run_until_complete(wallet._init_wallet())
-            
-            # Check USDT balance
-            usdt_balance = loop.run_until_complete(wallet.get_usdt_balance())
-            if usdt_balance < amount:
-                self.send_error_response(400, f'Insufficient USDT. Have: {usdt_balance} USDT')
-                return
-            
-            result = loop.run_until_complete(
-                wallet.send_usdt(to_address, amount, comment)
-            )
-            
-            self.send_success_response(result)
+            try:
+                # Initialize wallet
+                loop.run_until_complete(wallet._init_wallet())
+                
+                # Check USDT balance
+                usdt_balance = loop.run_until_complete(wallet.get_usdt_balance())
+                if usdt_balance < amount:
+                    self.send_error_response(400, f'Insufficient USDT. Have: {usdt_balance} USDT')
+                    return
+                
+                result = loop.run_until_complete(
+                    wallet.send_usdt(to_address, amount, comment)
+                )
+                
+                self.send_success_response(result)
+                
+            finally:
+                loop.close()
             
         except json.JSONDecodeError:
             self.send_error_response(400, 'Invalid JSON')
