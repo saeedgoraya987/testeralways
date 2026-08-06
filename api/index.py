@@ -4,14 +4,14 @@ import asyncio
 import requests
 import os
 from pytoniq import WalletV4R2, LiteBalancer
-from pytoniq_core import Address
+from pytoniq_core import Address, Cell, begin_cell
 
 # ============================================
-# TON WALLET CLASS - FIXED INITIALIZATION
+# TON WALLET CLASS - FIXED TRANSFER
 # ============================================
 
 class TONWallet:
-    """TON Wallet handler - Fixed for new wallets"""
+    """TON Wallet handler - Fixed transfer"""
     
     def __init__(self):
         self.recovery_phrase = os.getenv('TON_RECOVERY_PHRASE')
@@ -26,7 +26,7 @@ class TONWallet:
         self.address_user_friendly = None
     
     async def init_wallet(self):
-        """Initialize wallet - handles new wallets"""
+        """Initialize wallet"""
         if self.wallet is not None:
             return self.wallet
         
@@ -46,19 +46,15 @@ class TONWallet:
         self.address_user_friendly = addr.to_str(is_user_friendly=True)
         
         print(f"✅ Wallet loaded: {self.address_user_friendly}")
-        print(f"⚠️  If wallet is new, send at least 0.01 TON first to activate it")
         
         return self.wallet
     
     async def get_seqno_safe(self):
-        """Get seqno safely - handles new wallets"""
+        """Get seqno safely"""
         try:
             await self.init_wallet()
-            seqno = await self.wallet.get_seqno()
-            return seqno
-        except Exception as e:
-            print(f"Seqno error (wallet may be new): {e}")
-            # New wallets have seqno 0
+            return await self.wallet.get_seqno()
+        except Exception:
             return 0
     
     async def get_balance(self):
@@ -69,7 +65,6 @@ class TONWallet:
             return balance / 1e9
         except Exception as e:
             print(f"Balance error: {e}")
-            # Fallback to TON Center API
             try:
                 url = "https://toncenter.com/api/v2/getAddressBalance"
                 params = {'address': self.address_raw}
@@ -78,8 +73,8 @@ class TONWallet:
                     data = response.json()
                     balance_nano = int(data.get('result', 0))
                     return balance_nano / 1e9
-            except Exception as e2:
-                print(f"Fallback error: {e2}")
+            except:
+                pass
             return 0
     
     async def get_usdt_balance(self):
@@ -107,7 +102,7 @@ class TONWallet:
             return 0
     
     async def send_ton(self, to_address, amount_ton, comment=""):
-        """Send TON - FIXED for new wallets"""
+        """Send TON - FIXED: use body parameter"""
         try:
             # Initialize wallet
             await self.init_wallet()
@@ -115,18 +110,15 @@ class TONWallet:
             # Validate address
             addr = Address(to_address)
             
-            # Get seqno - default to 0 if wallet is new
-            seqno = None
+            # Get seqno
             try:
                 seqno = await self.wallet.get_seqno()
-            except Exception as e:
-                print(f"Seqno error (wallet may be new): {e}")
-                # If wallet is new, seqno is 0
+            except Exception:
                 seqno = 0
             
             print(f"📊 Seqno: {seqno}")
             
-            # If seqno is 0 and balance is 0, wallet is new
+            # Check if wallet is active
             balance = await self.get_balance()
             if balance == 0 and seqno == 0:
                 return {
@@ -134,12 +126,21 @@ class TONWallet:
                     'error': 'Wallet is new (0 balance, 0 transactions). Please send at least 0.01 TON to activate it first.'
                 }
             
-            # Create transfer
+            # Create comment cell if needed
+            message = None
+            if comment:
+                # Create a cell with the comment
+                message = begin_cell() \
+                    .store_uint(0, 32) \
+                    .store_string(comment) \
+                    .end_cell()
+            
+            # Create transfer - use 'body' instead of 'comment'
             tx = await self.wallet.transfer(
                 destination=addr,
                 amount=int(amount_ton * 1e9),
-                comment=comment,
-                seqno=seqno
+                seqno=seqno,
+                body=message  # Use body parameter for comments
             )
             
             # Send
@@ -151,7 +152,7 @@ class TONWallet:
                 'amount': amount_ton,
                 'to': to_address,
                 'from': self.address_user_friendly,
-                'seqno': seqno
+                'comment': comment
             }
             
         except Exception as e:
@@ -172,27 +173,34 @@ class TONWallet:
             
             addr = Address(to_address)
             
-            # Get seqno safely
-            seqno = None
+            # Get seqno
             try:
                 seqno = await self.wallet.get_seqno()
             except Exception:
                 seqno = 0
             
-            # Check if wallet is new
+            # Check if wallet is active
             balance = await self.get_balance()
             if balance == 0 and seqno == 0:
                 return {
                     'success': False,
-                    'error': 'Wallet is new (0 balance). Please send at least 0.01 TON to activate it first.'
+                    'error': 'Wallet is new. Please send at least 0.01 TON to activate it first.'
                 }
+            
+            # Create comment cell if needed
+            message = None
+            if comment:
+                message = begin_cell() \
+                    .store_uint(0, 32) \
+                    .store_string(comment) \
+                    .end_cell()
             
             tx = await self.wallet.transfer_jettons(
                 jetton_master=Address(USDT_MASTER),
                 destination=addr,
                 amount=int(amount_usdt * 1e9),
-                comment=comment,
-                seqno=seqno
+                seqno=seqno,
+                body=message  # Use body for comments
             )
             
             await self.wallet.send_transfer(tx)
