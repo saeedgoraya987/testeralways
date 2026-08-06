@@ -7,11 +7,11 @@ from pytoniq import WalletV4R2, LiteBalancer
 from pytoniq_core import Address
 
 # ============================================
-# TON WALLET CLASS - FIXED PROVIDER
+# TON WALLET CLASS - FIXED INITIALIZATION
 # ============================================
 
 class TONWallet:
-    """TON Wallet handler - Fixed provider"""
+    """TON Wallet handler - Fixed for new wallets"""
     
     def __init__(self):
         self.recovery_phrase = os.getenv('TON_RECOVERY_PHRASE')
@@ -26,20 +26,15 @@ class TONWallet:
         self.address_user_friendly = None
     
     async def init_wallet(self):
-        """Initialize wallet with correct provider"""
+        """Initialize wallet - handles new wallets"""
         if self.wallet is not None:
             return self.wallet
         
-        # Create provider with correct config
+        # Create provider
         self.provider = LiteBalancer.from_mainnet_config(trust_level=1)
-        
-        # IMPORTANT: Start the provider
         await self.provider.start_up()
         
-        # Wait for provider to be ready
-        await asyncio.sleep(0.5)
-        
-        # Create wallet with provider
+        # Create wallet
         self.wallet = await WalletV4R2.from_mnemonic(
             mnemonics=self.mnemonic_list,
             provider=self.provider
@@ -51,11 +46,23 @@ class TONWallet:
         self.address_user_friendly = addr.to_str(is_user_friendly=True)
         
         print(f"✅ Wallet loaded: {self.address_user_friendly}")
+        print(f"⚠️  If wallet is new, send at least 0.01 TON first to activate it")
         
         return self.wallet
     
+    async def get_seqno_safe(self):
+        """Get seqno safely - handles new wallets"""
+        try:
+            await self.init_wallet()
+            seqno = await self.wallet.get_seqno()
+            return seqno
+        except Exception as e:
+            print(f"Seqno error (wallet may be new): {e}")
+            # New wallets have seqno 0
+            return 0
+    
     async def get_balance(self):
-        """Get TON balance using provider"""
+        """Get TON balance"""
         try:
             await self.init_wallet()
             balance = await self.provider.get_balance(self.address_raw)
@@ -100,7 +107,7 @@ class TONWallet:
             return 0
     
     async def send_ton(self, to_address, amount_ton, comment=""):
-        """Send TON - Fixed seqno handling"""
+        """Send TON - FIXED for new wallets"""
         try:
             # Initialize wallet
             await self.init_wallet()
@@ -108,21 +115,23 @@ class TONWallet:
             # Validate address
             addr = Address(to_address)
             
-            # Get seqno with retry
+            # Get seqno - default to 0 if wallet is new
             seqno = None
-            for attempt in range(3):
-                try:
-                    seqno = await self.wallet.get_seqno()
-                    if seqno is not None:
-                        break
-                except Exception as e:
-                    print(f"Seqno attempt {attempt + 1} failed: {e}")
-                    await asyncio.sleep(1)
+            try:
+                seqno = await self.wallet.get_seqno()
+            except Exception as e:
+                print(f"Seqno error (wallet may be new): {e}")
+                # If wallet is new, seqno is 0
+                seqno = 0
             
-            if seqno is None:
+            print(f"📊 Seqno: {seqno}")
+            
+            # If seqno is 0 and balance is 0, wallet is new
+            balance = await self.get_balance()
+            if balance == 0 and seqno == 0:
                 return {
                     'success': False,
-                    'error': 'Failed to get seqno after retries'
+                    'error': 'Wallet is new (0 balance, 0 transactions). Please send at least 0.01 TON to activate it first.'
                 }
             
             # Create transfer
@@ -141,13 +150,17 @@ class TONWallet:
                 'tx_hash': tx.hash().hex(),
                 'amount': amount_ton,
                 'to': to_address,
-                'from': self.address_user_friendly
+                'from': self.address_user_friendly,
+                'seqno': seqno
             }
             
         except Exception as e:
+            error_msg = str(e)
+            if '-256' in error_msg or 'seqno' in error_msg:
+                error_msg = 'Wallet needs activation. Please send at least 0.01 TON to this wallet first.'
             return {
                 'success': False,
-                'error': str(e)
+                'error': error_msg
             }
     
     async def send_usdt(self, to_address, amount_usdt, comment=""):
@@ -159,21 +172,19 @@ class TONWallet:
             
             addr = Address(to_address)
             
-            # Get seqno with retry
+            # Get seqno safely
             seqno = None
-            for attempt in range(3):
-                try:
-                    seqno = await self.wallet.get_seqno()
-                    if seqno is not None:
-                        break
-                except Exception as e:
-                    print(f"Seqno attempt {attempt + 1} failed: {e}")
-                    await asyncio.sleep(1)
+            try:
+                seqno = await self.wallet.get_seqno()
+            except Exception:
+                seqno = 0
             
-            if seqno is None:
+            # Check if wallet is new
+            balance = await self.get_balance()
+            if balance == 0 and seqno == 0:
                 return {
                     'success': False,
-                    'error': 'Failed to get seqno after retries'
+                    'error': 'Wallet is new (0 balance). Please send at least 0.01 TON to activate it first.'
                 }
             
             tx = await self.wallet.transfer_jettons(
@@ -272,7 +283,6 @@ class handler(BaseHTTPRequestHandler):
     def handle_balance(self):
         """Handle balance check"""
         try:
-            # Use asyncio.run() which handles loop management
             async def get_balances():
                 wallet = TONWallet()
                 await wallet.init_wallet()
@@ -347,7 +357,7 @@ class handler(BaseHTTPRequestHandler):
                 self.send_error_response(400, 'Invalid recipient address')
                 return
             
-            # Send TON using asyncio.run()
+            # Send TON
             async def send():
                 w = TONWallet()
                 await w.init_wallet()
