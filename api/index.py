@@ -162,18 +162,21 @@ class TONWallet:
                     .end_cell()
                 )
 
-            # FIX: transfer() both builds AND sends; it returns the sent Cell.
-            # No seqno parameter (pytoniq fetches it internally).
-            # No send_transfer() call needed — transfer() already sent the message.
+            # FIX: transfer() both builds AND sends.
+            # In this version of pytoniq it returns an int (the message hash as an
+            # integer), not a Cell — so we convert to hex directly instead of calling
+            # .hash().hex() on it.
             tx = await self.wallet.transfer(
                 destination=addr,
                 amount=int(amount_ton * 1e9),
                 body=body
             )
 
+            tx_hash = format(tx, '064x') if isinstance(tx, int) else tx.hash().hex()
+
             return {
                 'success': True,
-                'tx_hash': tx.hash().hex(),
+                'tx_hash': tx_hash,
                 'amount': amount_ton,
                 'to': to_address,
                 'from': self.address_user_friendly,
@@ -277,9 +280,11 @@ class TONWallet:
                 body=body
             )
 
+            tx_hash = format(tx, '064x') if isinstance(tx, int) else tx.hash().hex()
+
             return {
                 'success': True,
-                'tx_hash': tx.hash().hex(),
+                'tx_hash': tx_hash,
                 'amount': amount_usdt,
                 'to': to_address,
                 'currency': 'USDT',
