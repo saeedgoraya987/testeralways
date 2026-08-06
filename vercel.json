@@ -2,22 +2,38 @@
   "version": 2,
   "builds": [
     {
-      "src": "api/transfer.py",
+      "src": "api/index.py",
       "use": "@vercel/python"
     }
-  ],
+  },
   "routes": [
     {
-      "src": "/api/transfer",
-      "dest": "api/transfer.py"
+      "src": "/api/(.*)",
+      "dest": "/api/index.py"
     },
     {
-      "src": "/transfer",
-      "dest": "api/transfer.py"
+      "src": "/balance",
+      "dest": "/api/index.py"
+    },
+    {
+      "src": "/wallet",
+      "dest": "/api/index.py"
+    },
+    {
+      "src": "/send-ton",
+      "dest": "/api/index.py"
+    },
+    {
+      "src": "/send-usdt",
+      "dest": "/api/index.py"
+    },
+    {
+      "src": "/withdrawal-link",
+      "dest": "/api/index.py"
     },
     {
       "src": "/(.*)",
-      "dest": "api/transfer.py"
+      "dest": "/api/index.py"
     }
   ]
 }
