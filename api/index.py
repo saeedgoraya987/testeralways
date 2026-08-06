@@ -6,8 +6,12 @@ import os
 from pytoniq import WalletV4R2
 from pytoniq_core import Address
 
+# ============================================
+# TON WALLET CLASS - FIXED
+# ============================================
+
 class TONWallet:
-    """TON Wallet handler"""
+    """TON Wallet handler - Fixed version"""
     
     def __init__(self):
         self.recovery_phrase = os.getenv('TON_RECOVERY_PHRASE')
@@ -16,7 +20,11 @@ class TONWallet:
             raise ValueError("TON_RECOVERY_PHRASE not set in environment")
         
         mnemonic_list = self.recovery_phrase.split()
-        self.wallet = WalletV4R2.from_mnemonic(mnemonic_list, workchain=0)
+        
+        # FIX: Create wallet without workchain parameter
+        self.wallet = WalletV4R2.from_mnemonic(mnemonic_list)
+        
+        # Get address (default workchain 0)
         self.address = self.wallet.address.to_str()
     
     async def get_balance(self):
@@ -31,7 +39,8 @@ class TONWallet:
                 balance_nano = int(data.get('result', 0))
                 return balance_nano / 1e9
             return 0
-        except:
+        except Exception as e:
+            print(f"Balance error: {e}")
             return 0
     
     async def get_usdt_balance(self):
@@ -52,7 +61,8 @@ class TONWallet:
                 balance = int(result.get('balance', 0))
                 return balance / 1e9
             return 0
-        except:
+        except Exception as e:
+            print(f"USDT balance error: {e}")
             return 0
     
     async def send_ton(self, to_address, amount_ton, comment=""):
@@ -127,7 +137,7 @@ class TONWallet:
             return False
 
 # ============================================
-# Vercel Handler
+# VERCEL HANDLER
 # ============================================
 
 class handler(BaseHTTPRequestHandler):
@@ -177,13 +187,12 @@ class handler(BaseHTTPRequestHandler):
             'name': 'TON Payment API',
             'version': '1.0.0',
             'endpoints': {
-                'GET /api/balance': 'Check wallet balance',
-                'GET /api/wallet': 'Get wallet info',
-                'POST /api/send-ton': 'Send TON',
-                'POST /api/send-usdt': 'Send USDT',
-                'POST /api/withdrawal-link': 'Create withdrawal link'
-            },
-            'docs': 'https://github.com/your-repo'
+                'GET /balance': 'Check wallet balance',
+                'GET /wallet': 'Get wallet info',
+                'POST /send-ton': 'Send TON',
+                'POST /send-usdt': 'Send USDT',
+                'POST /withdrawal-link': 'Create withdrawal link'
+            }
         }
         self.send_success_response(response)
     
@@ -214,16 +223,11 @@ class handler(BaseHTTPRequestHandler):
         """Handle wallet info"""
         try:
             wallet = TONWallet()
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            ton_balance = loop.run_until_complete(wallet.get_balance())
             
             response = {
                 'success': True,
                 'address': wallet.address,
                 'explorer_url': f'https://tonscan.org/address/{wallet.address}',
-                'balance': ton_balance,
                 'network': 'mainnet'
             }
             self.send_success_response(response)
@@ -234,12 +238,10 @@ class handler(BaseHTTPRequestHandler):
     def handle_send_ton(self):
         """Handle sending TON"""
         try:
-            # Parse request body
             content_length = int(self.headers.get('Content-Length', 0))
             post_data = self.rfile.read(content_length)
             data = json.loads(post_data.decode())
             
-            # Validate
             required = ['to_address', 'amount']
             for field in required:
                 if field not in data:
@@ -260,7 +262,6 @@ class handler(BaseHTTPRequestHandler):
                 self.send_error_response(400, 'Invalid recipient address')
                 return
             
-            # Check balance
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
@@ -269,7 +270,6 @@ class handler(BaseHTTPRequestHandler):
                 self.send_error_response(400, f'Insufficient balance. Have: {balance} TON')
                 return
             
-            # Send
             result = loop.run_until_complete(
                 wallet.send_ton(to_address, amount, comment)
             )
@@ -311,7 +311,6 @@ class handler(BaseHTTPRequestHandler):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
-            # Check USDT balance
             usdt_balance = loop.run_until_complete(wallet.get_usdt_balance())
             if usdt_balance < amount:
                 self.send_error_response(400, f'Insufficient USDT. Have: {usdt_balance} USDT')
@@ -344,7 +343,6 @@ class handler(BaseHTTPRequestHandler):
                 self.send_error_response(400, 'address and amount are required')
                 return
             
-            # Call xRocket API
             params = {
                 'currency': currency,
                 'network': network,
@@ -411,9 +409,9 @@ if __name__ == '__main__':
     server = HTTPServer(('0.0.0.0', PORT), handler)
     print(f'🚀 TON Payment API running on http://localhost:{PORT}')
     print(f'📋 Endpoints:')
-    print(f'   GET  /api/balance')
-    print(f'   GET  /api/wallet')
-    print(f'   POST /api/send-ton')
-    print(f'   POST /api/send-usdt')
-    print(f'   POST /api/withdrawal-link')
+    print(f'   GET  /balance')
+    print(f'   GET  /wallet')
+    print(f'   POST /send-ton')
+    print(f'   POST /send-usdt')
+    print(f'   POST /withdrawal-link')
     server.serve_forever()
