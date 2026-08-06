@@ -3,15 +3,15 @@ import json
 import asyncio
 import requests
 import os
-from pytoniq import WalletV4R2
+from pytoniq import WalletV4R2, LiteBalancer
 from pytoniq_core import Address
 
 # ============================================
-# TON WALLET CLASS - CORRECTED
+# TON WALLET CLASS - WORKING VERSION
 # ============================================
 
 class TONWallet:
-    """TON Wallet handler - Corrected version"""
+    """TON Wallet handler - Working version"""
     
     def __init__(self):
         self.recovery_phrase = os.getenv('TON_RECOVERY_PHRASE')
@@ -19,12 +19,16 @@ class TONWallet:
         if not self.recovery_phrase:
             raise ValueError("TON_RECOVERY_PHRASE not set in environment")
         
-        # CORRECT: Pass mnemonics as list directly
         mnemonic_list = self.recovery_phrase.split()
         
-        # Create wallet - proper way for pytoniq
+        # CORRECT: Create provider first
+        # Using LiteBalancer for mainnet
+        self.provider = LiteBalancer.from_mainnet_config(trust_level=1)
+        
+        # Then create wallet with provider
         self.wallet = WalletV4R2.from_mnemonic(
-            mnemonics=mnemonic_list  # Explicit keyword argument
+            mnemonics=mnemonic_list,
+            provider=self.provider
         )
         
         # Get address
@@ -34,17 +38,22 @@ class TONWallet:
     async def get_balance(self):
         """Get TON balance"""
         try:
-            url = "https://toncenter.com/api/v2/getAddressBalance"
-            params = {'address': self.address}
-            response = requests.get(url, params=params, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                balance_nano = int(data.get('result', 0))
-                return balance_nano / 1e9
-            return 0
+            # Use provider to get balance
+            balance = await self.provider.get_balance(self.address)
+            return balance / 1e9
         except Exception as e:
             print(f"Balance error: {e}")
+            # Fallback to TON Center API
+            try:
+                url = "https://toncenter.com/api/v2/getAddressBalance"
+                params = {'address': self.address}
+                response = requests.get(url, params=params, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    balance_nano = int(data.get('result', 0))
+                    return balance_nano / 1e9
+            except:
+                pass
             return 0
     
     async def get_usdt_balance(self):
@@ -52,6 +61,7 @@ class TONWallet:
         USDT_MASTER = "EQCxE6mUtQJKFnGfaROHKOa1gaZ1Y5jgDsuRAtJ53cV-ZjvD"
         
         try:
+            # Use TON Center API for USDT
             url = "https://toncenter.com/api/v2/getAccountJettonBalance"
             params = {
                 'address': self.address,
@@ -139,32 +149,6 @@ class TONWallet:
             return True
         except:
             return False
-
-# ============================================
-# ALTERNATIVE: Use TonConnect for simpler setup
-# ============================================
-
-class SimpleTONWallet:
-    """Simpler TON wallet using requests only"""
-    
-    def __init__(self, recovery_phrase):
-        self.phrase = recovery_phrase
-        self.address = self._get_address_from_phrase()
-    
-    def _get_address_from_phrase(self):
-        """Get address from mnemonic using TON Center API"""
-        try:
-            # Use toncenter API to derive address
-            import hashlib
-            import hmac
-            
-            # Simple derivation (for demo - use proper BIP39 in production)
-            # This is a simplified version
-            seed = self.phrase.encode()
-            # In production, use proper BIP39 derivation
-            return "EQC..."  # Placeholder
-        except:
-            return "EQC..."
 
 # ============================================
 # VERCEL HANDLER
@@ -444,5 +428,4 @@ if __name__ == '__main__':
     print(f'   POST /send-ton')
     print(f'   POST /send-usdt')
     print(f'   POST /withdrawal-link')
-    print(f'⚠️  Make sure TON_RECOVERY_PHRASE is set in .env')
     server.serve_forever()
