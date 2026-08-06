@@ -112,16 +112,8 @@ class TONWallet:
             # Validate address
             addr = Address(to_address)
             
-            # FIX: removed provider.get_seqno() fallback — that method does not exist
-            # on LiteBalancer. Only wallet.get_seqno() is valid. Fall back to 0.
-            try:
-                seqno = await self.wallet.get_seqno()
-                print(f"📊 Seqno from chain: {seqno}")
-            except Exception as e:
-                print(f"Seqno error: {e}")
-                seqno = 0
-                print(f"📊 Seqno default: {seqno}")
-            
+            # Note: seqno is fetched internally by wallet.transfer() — no need to pass it manually
+
             # Check balance
             balance = await self.get_balance()
             if balance < amount_ton:
@@ -131,7 +123,6 @@ class TONWallet:
                 }
             
             print(f"💰 Balance: {balance} TON")
-            print(f"📊 Seqno: {seqno}")
             
             # Create comment cell if needed
             message = None
@@ -145,10 +136,10 @@ class TONWallet:
             
             # FIX: wallet.transfer() BOTH builds AND sends the transaction.
             # It returns the external message Cell. There is no send_transfer() method.
+            # FIX: 'seqno' is not an accepted keyword argument — transfer() fetches it internally.
             tx = await self.wallet.transfer(
                 destination=addr,
                 amount=int(amount_ton * 1e9),
-                seqno=seqno,
                 body=message
             )
             # FIX: removed the invalid `await self.wallet.send_transfer(tx)` call —
@@ -179,13 +170,9 @@ class TONWallet:
             await self.init_wallet()
             
             addr = Address(to_address)
-            
-            # FIX: removed provider.get_seqno() fallback — that method does not exist
-            try:
-                seqno = await self.wallet.get_seqno()
-            except Exception:
-                seqno = 0
-            
+
+            # Note: seqno is fetched internally by wallet.transfer() — no need to pass it manually
+
             # Check USDT balance
             usdt_balance = await self.get_usdt_balance()
             if usdt_balance < amount_usdt:
@@ -262,11 +249,11 @@ class TONWallet:
 
             # Step 3: Send to the jetton wallet with 0.05 TON for gas
             # FIX: removed invalid transfer_jettons() and send_transfer() calls
+            # FIX: 'seqno' is not an accepted keyword argument — transfer() fetches it internally.
             tx = await self.wallet.transfer(
                 destination=jetton_wallet_addr,
                 amount=int(0.05 * 1e9),   # 0.05 TON to cover jetton transfer gas
-                body=body,
-                seqno=seqno
+                body=body
             )
             # FIX: removed the invalid `await self.wallet.send_transfer(tx)` call —
             # transfer() already sent the message above.
