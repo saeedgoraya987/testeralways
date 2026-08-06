@@ -172,7 +172,9 @@ class TONWallet:
                 body=body
             )
 
-            tx_hash = format(tx, '064x') if isinstance(tx, int) else tx.hash().hex()
+            # transfer() returns a status int (1 = success), not the tx hash.
+            # Fetch the real hash from Toncenter — the latest outgoing tx is ours.
+            tx_hash = self._fetch_latest_tx_hash()
 
             return {
                 'success': True,
@@ -280,7 +282,8 @@ class TONWallet:
                 body=body
             )
 
-            tx_hash = format(tx, '064x') if isinstance(tx, int) else tx.hash().hex()
+            # transfer() returns a status int — fetch the real hash from Toncenter.
+            tx_hash = self._fetch_latest_tx_hash()
 
             return {
                 'success': True,
@@ -293,6 +296,27 @@ class TONWallet:
 
         except Exception as e:
             return {'success': False, 'error': str(e)}
+
+    def _fetch_latest_tx_hash(self):
+        """
+        Fetch the hash of the most recent outgoing transaction for this wallet.
+
+        pytoniq's transfer() returns a status int (1 = accepted), not the tx hash.
+        The real hash is retrieved from Toncenter immediately after sending.
+        """
+        try:
+            resp = requests.get(
+                "https://toncenter.com/api/v2/getTransactions",
+                params={'address': self.address_raw, 'limit': 1},
+                timeout=10
+            )
+            if resp.status_code == 200:
+                txs = resp.json().get('result', [])
+                if txs:
+                    return txs[0].get('transaction_id', {}).get('hash', '')
+        except Exception as e:
+            print(f"Could not fetch tx hash: {e}")
+        return ''
 
     def validate_address(self, address):
         """Validate a TON address string."""
