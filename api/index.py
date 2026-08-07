@@ -231,7 +231,7 @@ class handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split('?')[0]
-        if path in ('/api/wallet', '/wallet', '/'):
+        if path in ('/api/wallet', '/wallet'):
             self.handle_wallet()
         else:
             self.send_error_response(404, 'Endpoint not found')
