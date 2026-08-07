@@ -3,7 +3,7 @@ import json
 import asyncio
 import requests
 import os
-from pytoniq import WalletV4R2, WalletV3R2, WalletV3R1, LiteBalancer
+from pytoniq import WalletV4R2, LiteBalancer
 from pytoniq_core import Address, begin_cell
 
 # ============================================
@@ -25,46 +25,18 @@ class TONWallet:
         self.address_user_friendly = None
 
     async def init_wallet(self):
-        """Initialize wallet (idempotent).
-
-        Reads two optional env vars so the derived address matches the real wallet:
-          TON_WALLET_VERSION    — 'v3r1', 'v3r2', or 'v4r2' (default 'v4r2')
-          TON_WALLET_SUBWALLET_ID — integer subwallet id (default 698983191)
-
-        Tonkeeper / TonHub wallets created before ~2023 are usually v3r2.
-        """
+        """Initialize wallet (idempotent)."""
         if self.wallet is not None:
             return self.wallet
-
-        # --- wallet version selection ---
-        version_map = {
-            'v3r1': WalletV3R1,
-            'v3r2': WalletV3R2,
-            'v4r2': WalletV4R2,
-        }
-        version_key = os.getenv('TON_WALLET_VERSION', 'v4r2').strip().lower()
-        WalletClass = version_map.get(version_key)
-        if WalletClass is None:
-            raise ValueError(
-                f"Unknown TON_WALLET_VERSION '{version_key}'. "
-                f"Use one of: {', '.join(version_map)}"
-            )
-
-        # --- subwallet id (v3/v4 both accept it; default is the TON standard) ---
-        subwallet_id_env = os.getenv('TON_WALLET_SUBWALLET_ID', '').strip()
-        subwallet_id = int(subwallet_id_env) if subwallet_id_env else 698983191
-
-        print(f"🔑 Using wallet version: {version_key.upper()}, subwallet_id: {subwallet_id}")
 
         # FIX: official pytoniq signature is from_mnemonic(provider, mnemonics) —
         # provider comes first positionally (confirmed from pytoniq examples).
         self.provider = LiteBalancer.from_mainnet_config(trust_level=1)
         await self.provider.start_up()
 
-        self.wallet = await WalletClass.from_mnemonic(
+        self.wallet = await WalletV4R2.from_mnemonic(
             self.provider,
-            self.mnemonic_list,
-            subwallet_id=subwallet_id
+            self.mnemonic_list
         )
 
         # FIX: use is_url_safe=True for proper base64url encoding of the
