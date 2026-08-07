@@ -42,10 +42,12 @@ class TONWallet:
         # FIX: use is_url_safe=True for proper base64url encoding of the
         # user-friendly address (replaces + and / with - and _).
         self.address_raw = self.wallet.address.to_str(is_user_friendly=False)
+        # Non-bounceable (UQ...) is the correct user-facing wallet address format.
+        # Bounceable (EQ...) is for smart contracts. Wallets always use non-bounceable.
         self.address_user_friendly = self.wallet.address.to_str(
             is_user_friendly=True,
             is_url_safe=True,
-            is_bounceable=True
+            is_bounceable=False
         )
 
         print(f"✅ Wallet loaded: {self.address_user_friendly}")
