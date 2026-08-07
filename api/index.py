@@ -164,19 +164,19 @@ class TONWallet:
                     .end_cell()
                 )
 
-            # FIX: transfer() both builds AND sends.
-            # In this version of pytoniq it returns an int (the message hash as an
-            # integer), not a Cell — so we convert to hex directly instead of calling
-            # .hash().hex() on it.
-            tx = await self.wallet.transfer(
+            # Snapshot the current latest tx hash BEFORE broadcasting so we can
+            # detect when the new transaction lands on-chain.
+            old_hash = self._get_latest_tx_hash()
+
+            await self.wallet.transfer(
                 destination=addr,
                 amount=int(amount_ton * 1e9),
                 body=body
             )
 
-            # transfer() returns a status int (1 = success), not the tx hash.
-            # Fetch the real hash from Toncenter — the latest outgoing tx is ours.
-            tx_hash = self._fetch_latest_tx_hash()
+            # Poll until Toncenter returns a hash different from the pre-send
+            # snapshot — that is our transaction, not a previous one.
+            tx_hash = self._wait_for_new_tx_hash(old_hash)
 
             return {
                 'success': True,
@@ -192,13 +192,8 @@ class TONWallet:
             print(f"❌ Send error: {error_msg}")
             return {'success': False, 'error': error_msg}
 
-    def _fetch_latest_tx_hash(self):
-        """
-        Fetch the hash of the most recent outgoing transaction for this wallet.
-
-        pytoniq's transfer() returns a status int (1 = accepted), not the tx hash.
-        The real hash is retrieved from Toncenter immediately after sending.
-        """
+    def _get_latest_tx_hash(self):
+        """Return the hash of the most recent transaction for this wallet, or ''."""
         try:
             resp = requests.get(
                 "https://toncenter.com/api/v2/getTransactions",
@@ -211,6 +206,26 @@ class TONWallet:
                     return txs[0].get('transaction_id', {}).get('hash', '')
         except Exception as e:
             print(f"Could not fetch tx hash: {e}")
+        return ''
+
+    def _wait_for_new_tx_hash(self, old_hash, timeout=60, interval=3):
+        """
+        Poll Toncenter until a transaction different from old_hash appears.
+
+        transfer() broadcasts the message but the tx is only visible on-chain
+        a few seconds later. Calling getTransactions immediately returns the
+        previous tx (old_hash). We loop until the latest hash changes, then
+        return the new one. Gives up after `timeout` seconds and returns ''.
+        """
+        import time
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            time.sleep(interval)
+            new_hash = self._get_latest_tx_hash()
+            if new_hash and new_hash != old_hash:
+                print(f"✅ New tx confirmed: {new_hash}")
+                return new_hash
+        print("⚠️  Timed out waiting for new tx hash.")
         return ''
 
     def get_ton_price_usd(self):
