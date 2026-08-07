@@ -213,6 +213,22 @@ class TONWallet:
             print(f"Could not fetch tx hash: {e}")
         return ''
 
+    def get_ton_price_usd(self):
+        """Fetch current TON price in USD from CoinGecko."""
+        try:
+            resp = requests.get(
+                "https://api.coingecko.com/api/v3/simple/price",
+                params={'ids': 'the-open-network', 'vs_currencies': 'usd'},
+                timeout=10
+            )
+            if resp.status_code == 200:
+                price = resp.json().get('the-open-network', {}).get('usd')
+                if price:
+                    return float(price)
+        except Exception as e:
+            print(f"Price fetch error: {e}")
+        raise Exception("Could not fetch TON/USD price from CoinGecko")
+
     def validate_address(self, address):
         """Validate a TON address string."""
         try:
@@ -288,10 +304,10 @@ class handler(BaseHTTPRequestHandler):
                     return
 
             to_address = data['to_address']
-            amount = float(data['amount'])
+            amount_usdt = float(data['amount'])   # amount is in USDT
             comment = data.get('comment', '')
 
-            if amount <= 0:
+            if amount_usdt <= 0:
                 self.send_error_response(400, 'Amount must be greater than 0')
                 return
 
@@ -299,13 +315,27 @@ class handler(BaseHTTPRequestHandler):
                 self.send_error_response(400, 'Invalid recipient address')
                 return
 
+            # Convert USDT → TON using live price
+            w = TONWallet()
+            try:
+                ton_price_usd = w.get_ton_price_usd()
+            except Exception as e:
+                self.send_error_response(500, str(e))
+                return
+
+            amount_ton = round(amount_usdt / ton_price_usd, 9)
+
             async def send():
-                w = TONWallet()
                 await w.init_wallet()
-                return await w.send_ton(to_address, amount, comment)
+                return await w.send_ton(to_address, amount_ton, comment)
 
             result = asyncio.run(send())
             if result.get('success'):
+                result['amount_usdt'] = amount_usdt
+                result['amount_ton'] = amount_ton
+                result['ton_price_usd'] = ton_price_usd
+                # remove the raw 'amount' key so the response is unambiguous
+                result.pop('amount', None)
                 self.send_success_response(result)
             else:
                 self.send_error_response(400, result.get('error', 'Send failed'))
