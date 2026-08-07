@@ -192,113 +192,6 @@ class TONWallet:
             print(f"❌ Send error: {error_msg}")
             return {'success': False, 'error': error_msg}
 
-    async def send_usdt(self, to_address, amount_usdt, comment=""):
-        """Send USDT (jetton) to an address."""
-        USDT_MASTER = "EQCxE6mUtQJKFnGfaROHKOa1gaZ1Y5jgDsuRAtJ53cV-ZjvD"
-
-        try:
-            await self.init_wallet()
-
-            addr = Address(to_address)
-
-            # FIX: deploy wallet contract if this is its first on-chain transaction.
-            await self._ensure_deployed()
-
-            # Check USDT balance
-            usdt_balance = await self.get_usdt_balance()
-            if usdt_balance < amount_usdt:
-                return {
-                    'success': False,
-                    'error': f'Insufficient USDT. Have: {usdt_balance} USDT'
-                }
-
-            # FIX: WalletV4R2 has no transfer_jettons() method.
-            # Jetton transfers require three steps:
-            #   1. Look up the user's personal jetton wallet address (not the master).
-            #   2. Build the standard jetton transfer message (op 0xf8a7ea5).
-            #   3. Send TON (for gas) to that jetton wallet with the payload as body.
-
-            # Step 1 — get user's USDT jetton wallet address via Toncenter v3
-            try:
-                resp = requests.get(
-                    "https://toncenter.com/api/v3/jetton/wallets",
-                    params={
-                        'owner_address': self.address_raw,
-                        'jetton_address': USDT_MASTER
-                    },
-                    timeout=10
-                )
-                resp.raise_for_status()
-                jetton_wallets = resp.json().get('jetton_wallets', [])
-                if not jetton_wallets:
-                    return {
-                        'success': False,
-                        'error': 'No USDT jetton wallet found for this address. '
-                                 'You may not hold any USDT yet.'
-                    }
-                jetton_wallet_addr = Address(jetton_wallets[0]['address'])
-            except Exception as e:
-                return {'success': False, 'error': f'Failed to get USDT jetton wallet: {e}'}
-
-            # Step 2 — build the jetton transfer payload
-            # FIX: USDT on TON uses 6 decimals (1e6), not 9.
-            if comment:
-                forward_payload = (
-                    begin_cell()
-                    .store_uint(0, 32)
-                    .store_snake_string(comment)
-                    .end_cell()
-                )
-                body = (
-                    begin_cell()
-                    .store_uint(0xf8a7ea5, 32)           # op: jetton_transfer
-                    .store_uint(0, 64)                    # query_id
-                    .store_coins(int(amount_usdt * 1e6))  # amount in minimal USDT units
-                    .store_address(addr)                  # recipient
-                    .store_address(self.wallet.address)   # return excess TON here
-                    .store_uint(0, 1)                     # no custom payload
-                    .store_coins(int(0.001 * 1e9))        # forward TON (to carry payload)
-                    .store_uint(1, 1)                     # forward_payload as cell ref
-                    .store_ref(forward_payload)
-                    .end_cell()
-                )
-            else:
-                body = (
-                    begin_cell()
-                    .store_uint(0xf8a7ea5, 32)
-                    .store_uint(0, 64)
-                    .store_coins(int(amount_usdt * 1e6))
-                    .store_address(addr)
-                    .store_address(self.wallet.address)
-                    .store_uint(0, 1)
-                    .store_coins(1)                       # 1 nanoton forward for notification
-                    .store_uint(0, 1)                     # no forward payload
-                    .end_cell()
-                )
-
-            # Step 3 — send to the jetton wallet (NOT the master contract)
-            # 0.05 TON covers jetton transfer gas fees.
-            tx = await self.wallet.transfer(
-                destination=jetton_wallet_addr,
-                amount=int(0.05 * 1e9),
-                body=body
-            )
-
-            # transfer() returns a status int — fetch the real hash from Toncenter.
-            tx_hash = self._fetch_latest_tx_hash()
-
-            return {
-                'success': True,
-                'tx_hash': tx_hash,
-                'amount': amount_usdt,
-                'to': to_address,
-                'currency': 'USDT',
-                'from': self.address_user_friendly
-            }
-
-        except Exception as e:
-            return {'success': False, 'error': str(e)}
-
     def _fetch_latest_tx_hash(self):
         """
         Fetch the hash of the most recent outgoing transaction for this wallet.
@@ -338,12 +231,8 @@ class handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split('?')[0]
-        if path in ('/api/balance', '/balance'):
-            self.handle_balance()
-        elif path in ('/api/wallet', '/wallet'):
-            self.handle_wallet_info()
-        elif path == '/':
-            self.handle_root()
+        if path in ('/api/wallet', '/wallet', '/'):
+            self.handle_wallet()
         else:
             self.send_error_response(404, 'Endpoint not found')
 
@@ -351,10 +240,6 @@ class handler(BaseHTTPRequestHandler):
         path = self.path.split('?')[0]
         if path in ('/api/send-ton', '/send-ton'):
             self.handle_send_ton()
-        elif path in ('/api/send-usdt', '/send-usdt'):
-            self.handle_send_usdt()
-        elif path in ('/api/withdrawal-link', '/withdrawal-link'):
-            self.handle_withdrawal_link()
         else:
             self.send_error_response(404, 'Endpoint not found')
 
@@ -370,50 +255,22 @@ class handler(BaseHTTPRequestHandler):
     # Route handlers
     # ----------------------------------------
 
-    def handle_root(self):
-        self.send_success_response({
-            'name': 'TON Payment API',
-            'version': '1.0.0',
-            'endpoints': {
-                'GET /balance': 'Check wallet balance',
-                'GET /wallet': 'Get wallet info',
-                'POST /send-ton': 'Send TON',
-                'POST /send-usdt': 'Send USDT',
-                'POST /withdrawal-link': 'Create withdrawal link'
-            }
-        })
-
-    def handle_balance(self):
+    def handle_wallet(self):
+        """GET /wallet — address, balances, and explorer link in one call."""
         try:
-            async def get_balances():
+            async def get_wallet():
                 w = TONWallet()
                 await w.init_wallet()
                 ton = await w.get_balance()
                 usdt = await w.get_usdt_balance()
                 return w, ton, usdt
 
-            wallet, ton_balance, usdt_balance = asyncio.run(get_balances())
+            wallet, ton_balance, usdt_balance = asyncio.run(get_wallet())
             self.send_success_response({
                 'success': True,
                 'address': wallet.address_user_friendly,
                 'address_raw': wallet.address_raw,
-                'balances': {'ton': ton_balance, 'usdt': usdt_balance}
-            })
-        except Exception as e:
-            self.send_error_response(500, str(e))
-
-    def handle_wallet_info(self):
-        try:
-            async def get_info():
-                w = TONWallet()
-                await w.init_wallet()
-                return w
-
-            wallet = asyncio.run(get_info())
-            self.send_success_response({
-                'success': True,
-                'address': wallet.address_user_friendly,
-                'address_raw': wallet.address_raw,
+                'balances': {'ton': ton_balance, 'usdt': usdt_balance},
                 'explorer_url': f'https://tonscan.org/address/{wallet.address_user_friendly}',
                 'network': 'mainnet'
             })
@@ -458,88 +315,6 @@ class handler(BaseHTTPRequestHandler):
         except Exception as e:
             self.send_error_response(500, str(e))
 
-    def handle_send_usdt(self):
-        try:
-            content_length = int(self.headers.get('Content-Length', 0))
-            data = json.loads(self.rfile.read(content_length).decode())
-
-            for field in ('to_address', 'amount'):
-                if field not in data:
-                    self.send_error_response(400, f'Missing field: {field}')
-                    return
-
-            to_address = data['to_address']
-            amount = float(data['amount'])
-            comment = data.get('comment', '')
-
-            if amount <= 0:
-                self.send_error_response(400, 'Amount must be greater than 0')
-                return
-
-            if not TONWallet().validate_address(to_address):
-                self.send_error_response(400, 'Invalid recipient address')
-                return
-
-            async def send():
-                w = TONWallet()
-                await w.init_wallet()
-                return await w.send_usdt(to_address, amount, comment)
-
-            result = asyncio.run(send())
-            if result.get('success'):
-                self.send_success_response(result)
-            else:
-                self.send_error_response(400, result.get('error', 'Send failed'))
-
-        except json.JSONDecodeError:
-            self.send_error_response(400, 'Invalid JSON')
-        except Exception as e:
-            self.send_error_response(500, str(e))
-
-    def handle_withdrawal_link(self):
-        try:
-            content_length = int(self.headers.get('Content-Length', 0))
-            # FIX: renamed from 'data' to 'req_data' — the original code later did
-            # `data = response.json()` which silently shadowed the request body.
-            req_data = json.loads(self.rfile.read(content_length).decode())
-
-            currency = req_data.get('currency', 'TON')
-            network = req_data.get('network', 'TON')
-            address = req_data.get('address')
-            amount = req_data.get('amount')
-
-            if not address or not amount:
-                self.send_error_response(400, 'address and amount are required')
-                return
-
-            resp = requests.get(
-                'https://pay.xrocket.tg/withdrawal-link',
-                params={
-                    'currency': currency,
-                    'network': network,
-                    'address': address,
-                    'amount': str(amount)
-                },
-                timeout=10
-            )
-
-            if resp.status_code == 200:
-                resp_data = resp.json()
-                self.send_success_response({
-                    'success': True,
-                    'telegram_link': resp_data.get('data', {}).get('telegramAppLink'),
-                    'amount': amount,
-                    'currency': currency,
-                    'address': address
-                })
-            else:
-                self.send_error_response(500, 'Failed to create withdrawal link')
-
-        except json.JSONDecodeError:
-            self.send_error_response(400, 'Invalid JSON')
-        except Exception as e:
-            self.send_error_response(500, str(e))
-
     # ----------------------------------------
     # Response helpers
     # ----------------------------------------
@@ -570,10 +345,7 @@ if __name__ == '__main__':
     server = HTTPServer(('0.0.0.0', PORT), handler)
     print(f'🚀 TON Payment API running on http://localhost:{PORT}')
     print('📋 Endpoints:')
-    print('   GET  /balance')
     print('   GET  /wallet')
     print('   POST /send-ton')
-    print('   POST /send-usdt')
-    print('   POST /withdrawal-link')
     print('⚠️  Make sure TON_RECOVERY_PHRASE is set in .env')
     server.serve_forever()
